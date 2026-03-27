@@ -236,9 +236,10 @@ class InteractivePerspectiveMixer:
         )
 
         # ---- blending -------------------------------------------------------
-        # layer mask: warped alpha of the print (0-1)
-        layer_mask     = warped_alpha.astype(np.float32) / 255.0     # (H,W)
-        layer_mask_3ch = layer_mask[:, :, np.newaxis]                # broadcast
+        # warped_alpha_normalized: warped alpha of the print (0-1)
+        # Note: renamed to avoid shadowing the 'layer_mask' parameter
+        warped_alpha_normalized = warped_alpha.astype(np.float32) / 255.0     # (H,W)
+        warped_alpha_3ch = warped_alpha_normalized[:, :, np.newaxis]                # broadcast
 
         bg_f    = bg_rgb.astype(np.float32)
         layer_f = warped_rgb.astype(np.float32)
@@ -251,7 +252,7 @@ class InteractivePerspectiveMixer:
 
         # RGB 合成：在 layer warped 区域内用 blended 替换 bg，其余保留 bg
         # 使用直通 alpha（Straight Alpha）—— 不预乘，PNG 标准格式
-        result_rgb_f = bg_f * (1.0 - layer_mask_3ch) + blended * layer_mask_3ch
+        result_rgb_f = bg_f * (1.0 - warped_alpha_3ch) + blended * warped_alpha_3ch
         result_u8    = result_rgb_f.clip(0, 255).astype(np.uint8)
 
         # ---- 输出 alpha 通道 ------------------------------------------------
@@ -279,8 +280,9 @@ class InteractivePerspectiveMixer:
 
         # warped_layer 输出：仅经过透视变换的 layer，无合成
         # 格式与原始 layer 保持一致：如果原 layer 有 alpha 就输出 RGBA，否则 RGB
-        layer_has_alpha = (layer_mask is not None) or (layer_np.shape[2] == 4)
-        if layer_has_alpha:
+        # 注意：layer_mask 参数优先级高于内嵌 alpha
+        original_layer_has_alpha = (layer_mask is not None) or (layer_np.shape[2] == 4)
+        if original_layer_has_alpha:
             warped_layer_u8 = np.concatenate(
                 [warped_rgb, warped_alpha[:, :, np.newaxis]], axis=-1
             )
@@ -299,22 +301,55 @@ class InteractivePerspectiveMixer:
         #   node.imgs[2] = layer input       (used by Open Editor as layer overlay)
         # bg_np and layer_np are saved as-is (preserving original channels incl. alpha)
         # so the editor shows the actual source image, not a stripped RGB copy.
+        ui_images = []
         try:
             tmpdir = folder_paths.get_temp_directory()
             uid = uuid.uuid4().hex[:10]
+            
             def _save(arr, tag):
+                """Save numpy array to PNG and return ComfyUI format dict."""
+                if arr is None or arr.size == 0:
+                    return None
+                
                 name = f"ipm_{tag}_{uid}.png"
-                c = arr.shape[2] if arr.ndim == 3 else 1
-                mode = "RGBA" if c >= 4 else "RGB"
-                Image.fromarray(arr[:, :, :4 if c >= 4 else 3], mode).save(
-                    os.path.join(tmpdir, name), compress_level=1)
-                return {"filename": name, "subfolder": "", "type": "temp"}
-            ui_images = [
-                _save(result_u8[:, :, :3], "r"),
-                _save(bg_np,               "b"),
-                _save(layer_np,            "l"),
-            ]
-        except Exception:
+                try:
+                    # Ensure array is uint8
+                    if arr.dtype != np.uint8:
+                        arr = (arr * 255).clip(0, 255).astype(np.uint8) if arr.dtype in [np.float32, np.float64] else arr.astype(np.uint8)
+                    
+                    # Determine channels
+                    if arr.ndim == 2:
+                        # Grayscale
+                        pil_img = Image.fromarray(arr, mode="L")
+                    elif arr.ndim == 3:
+                        c = arr.shape[2]
+                        if c == 1:
+                            pil_img = Image.fromarray(arr[:, :, 0], mode="L")
+                        elif c == 3:
+                            pil_img = Image.fromarray(arr[:, :, :3], mode="RGB")
+                        elif c >= 4:
+                            pil_img = Image.fromarray(arr[:, :, :4], mode="RGBA")
+                        else:
+                            return None
+                    else:
+                        return None
+                    
+                    pil_img.save(os.path.join(tmpdir, name), compress_level=1)
+                    return {"filename": name, "subfolder": "", "type": "temp"}
+                except Exception as e:
+                    print(f"[IPM] Warning: Failed to save {tag} image: {e}")
+                    return None
+            
+            # Try to save all three images
+            result_save = _save(result_u8[:, :, :3], "r")
+            bg_save = _save(bg_np, "b")
+            layer_save = _save(layer_np, "l")
+            
+            # Build ui_images, filtering out None values
+            ui_images = [x for x in [result_save, bg_save, layer_save] if x is not None]
+            
+        except Exception as e:
+            print(f"[IPM] Error saving preview images: {e}")
             ui_images = []
 
         return {
@@ -436,7 +471,7 @@ class LoadImageFromURL:
         return {
             "required": {
                 "url": ("STRING", {
-                    "default": "https://",
+                    "default": "",
                     "multiline": False,
                 }),
                 "timeout_seconds": ("INT", {
@@ -471,8 +506,14 @@ class LoadImageFromURL:
         rgb = image_np[:, :, :3]
         alpha = image_np[:, :, 3]
 
-        image_tensor = torch.from_numpy(rgb).unsqueeze(0)
-        mask_tensor = torch.from_numpy(alpha).unsqueeze(0)
+        # Ensure proper tensor format: (batch, height, width, channels) with float32
+        image_tensor = torch.from_numpy(rgb).unsqueeze(0).to(dtype=torch.float32)
+        mask_tensor = torch.from_numpy(alpha).unsqueeze(0).to(dtype=torch.float32)
+        
+        # Ensure tensors are on CPU (ComfyUI standard)
+        image_tensor = image_tensor.cpu()
+        mask_tensor = mask_tensor.cpu()
+        
         return (image_tensor, mask_tensor)
 
 
