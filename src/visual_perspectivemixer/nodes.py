@@ -601,6 +601,245 @@ class FillRGBAAlphaZeroBackground:
         return (result_rgb,)
 
 
+class LayerMerge:
+    """
+    多图层合并节点
+    
+    输入：多组图片（每组含 image 和 alpha 通道），组1为底层，组n为顶层
+    输出：合并后的 RGBA 图片 + Alpha 通道
+    
+    合并逻辑：
+    - 从下往上依次合并：Group 1(底) → Group 2 → ... → Group n(顶)
+    - 根据上层图的 alpha 来决定覆盖关系
+    - 结果 alpha：所有组都透明则透明，任何一组不透明则不透明
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "group_1_image": ("IMAGE", {
+                    "tooltip": "第 1 组图片（底层）的 RGB 图像",
+                }),
+                "group_1_alpha": ("MASK", {
+                    "tooltip": "第 1 组图片（底层）的 Alpha 通道",
+                }),
+                "group_1_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 1 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+            },
+            "optional": {
+                "group_2_image": ("IMAGE", {
+                    "tooltip": "第 2 组图片的 RGB 图像",
+                }),
+                "group_2_alpha": ("MASK", {
+                    "tooltip": "第 2 组图片的 Alpha 通道",
+                }),
+                "group_2_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 2 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_3_image": ("IMAGE", {
+                    "tooltip": "第 3 组图片的 RGB 图像",
+                }),
+                "group_3_alpha": ("MASK", {
+                    "tooltip": "第 3 组图片的 Alpha 通道",
+                }),
+                "group_3_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 3 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_4_image": ("IMAGE", {
+                    "tooltip": "第 4 组图片的 RGB 图像",
+                }),
+                "group_4_alpha": ("MASK", {
+                    "tooltip": "第 4 组图片的 Alpha 通道",
+                }),
+                "group_4_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 4 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_5_image": ("IMAGE", {
+                    "tooltip": "第 5 组图片的 RGB 图像",
+                }),
+                "group_5_alpha": ("MASK", {
+                    "tooltip": "第 5 组图片的 Alpha 通道",
+                }),
+                "group_5_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 5 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_6_image": ("IMAGE", {
+                    "tooltip": "第 6 组图片的 RGB 图像",
+                }),
+                "group_6_alpha": ("MASK", {
+                    "tooltip": "第 6 组图片的 Alpha 通道",
+                }),
+                "group_6_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 6 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_7_image": ("IMAGE", {
+                    "tooltip": "第 7 组图片的 RGB 图像",
+                }),
+                "group_7_alpha": ("MASK", {
+                    "tooltip": "第 7 组图片的 Alpha 通道",
+                }),
+                "group_7_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 7 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_8_image": ("IMAGE", {
+                    "tooltip": "第 8 组图片的 RGB 图像",
+                }),
+                "group_8_alpha": ("MASK", {
+                    "tooltip": "第 8 组图片的 Alpha 通道",
+                }),
+                "group_8_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 8 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_9_image": ("IMAGE", {
+                    "tooltip": "第 9 组图片的 RGB 图像",
+                }),
+                "group_9_alpha": ("MASK", {
+                    "tooltip": "第 9 组图片的 Alpha 通道",
+                }),
+                "group_9_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 9 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+                "group_10_image": ("IMAGE", {
+                    "tooltip": "第 10 组图片的 RGB 图像",
+                }),
+                "group_10_alpha": ("MASK", {
+                    "tooltip": "第 10 组图片的 Alpha 通道",
+                }),
+                "group_10_invert_alpha": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "是否翻转第 10 组 Alpha（开启后：透明与不透明互换）。",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("merged_image", "merged_alpha")
+    FUNCTION = "merge"
+    CATEGORY = "ComfyUI_tools_for_longpean_zsy"
+    DESCRIPTION = cleandoc(__doc__)
+
+    @staticmethod
+    def _tensor_to_np(t: torch.Tensor) -> np.ndarray:
+        """(1, H, W, C) float tensor → (H, W, C) uint8 numpy."""
+        return (t[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _mask_tensor_to_np(m: torch.Tensor) -> np.ndarray:
+        """
+        ComfyUI MASK shape: (1, H, W) float32, 1=opaque 0=transparent
+        → (H, W) uint8
+        """
+        return (m[0].cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _np_to_tensor(arr: np.ndarray) -> torch.Tensor:
+        """(H, W, C) uint8 numpy → (1, H, W, C) float tensor."""
+        return torch.from_numpy(arr.astype(np.float32) / 255.0).unsqueeze(0)
+
+    @staticmethod
+    def _mask_np_to_tensor(arr: np.ndarray) -> torch.Tensor:
+        """(H, W) uint8 numpy → (1, H, W) float tensor (MASK format)."""
+        return torch.from_numpy(arr.astype(np.float32) / 255.0).unsqueeze(0)
+
+    def merge(self, group_1_image, group_1_alpha, group_1_invert_alpha=False, **kwargs):
+        """
+        合并多组图片，返回 (merged_image, merged_alpha)
+        """
+        # 收集所有提供的组
+        groups = []
+        
+        # 第 1 组必须存在（通过校验）
+        img1_np = self._tensor_to_np(group_1_image)
+        alpha1_np = self._mask_tensor_to_np(group_1_alpha)
+        if group_1_invert_alpha:
+            alpha1_np = 255 - alpha1_np
+        groups.append((img1_np, alpha1_np))
+        
+        # 收集其他可选的组
+        for i in range(2, 11):  # Groups 2-10
+            img_key = f"group_{i}_image"
+            alpha_key = f"group_{i}_alpha"
+            
+            if img_key in kwargs and alpha_key in kwargs:
+                img = kwargs[img_key]
+                alpha = kwargs[alpha_key]
+                if img is not None and alpha is not None:
+                    img_np = self._tensor_to_np(img)
+                    alpha_np = self._mask_tensor_to_np(alpha)
+                    if kwargs.get(f"group_{i}_invert_alpha", False):
+                        alpha_np = 255 - alpha_np
+                    groups.append((img_np, alpha_np))
+        
+        if len(groups) == 0:
+            raise ValueError("至少需要提供第 1 组图片")
+        
+        # 确保所有组的图片大小一致
+        ref_h, ref_w = groups[0][0].shape[:2]
+        for i, (img, alpha) in enumerate(groups):
+            if img.shape[:2] != (ref_h, ref_w):
+                # 调整大小
+                img_resized = cv2.resize(img, (ref_w, ref_h), interpolation=cv2.INTER_LINEAR)
+                alpha_resized = cv2.resize(alpha, (ref_w, ref_h), interpolation=cv2.INTER_LINEAR)
+                groups[i] = (img_resized, alpha_resized)
+        
+        # ============================================================
+        # 分层合并逻辑
+        # ============================================================
+        # 初始化结果为第 1 组（底层）
+        result_rgb = groups[0][0].astype(np.float32)  # (H, W, 3) float32
+        result_alpha = groups[0][1].astype(np.float32)  # (H, W) float32，值范围 [0, 255]
+        
+        # 从第 2 组开始，依次合并到上方
+        for i in range(1, len(groups)):
+            layer_rgb = groups[i][0].astype(np.float32)  # (H, W, 3)
+            layer_alpha = groups[i][1].astype(np.float32) / 255.0  # 归一化到 [0, 1]
+            
+            # layer_alpha_3ch: (H, W, 3) 用于广播
+            layer_alpha_3ch = layer_alpha[:, :, np.newaxis]
+            
+            # 将当前结果 RGB 作为背景，layer 作为前景进行 Alpha 合成
+            # 使用标准 Over 操作（不预乘）
+            result_rgb_f = result_rgb / 255.0  # 归一化到 [0, 1]
+            result_rgb = result_rgb_f * (1.0 - layer_alpha_3ch) + layer_rgb / 255.0 * layer_alpha_3ch
+            result_rgb = (result_rgb * 255).clip(0, 255)
+            
+            # 更新 Alpha：只要本层不透明（layer_alpha > 0）就覆盖
+            # result_alpha_f: 当前累积的 alpha（已是 [0, 255]）
+            # 合并规则：结果 alpha = max(background_alpha, foreground_alpha)
+            # 或者更简单：如果 layer 不透明，则结果不透明
+            result_alpha_f = result_alpha / 255.0  # 归一化到 [0, 1]
+            result_alpha = np.maximum(result_alpha_f, layer_alpha) * 255  # 回到 [0, 255]
+        
+        # ============================================================
+        # 输出转换
+        # ============================================================
+        # result_rgb 应该是 (H, W, 3) uint8
+        result_rgb_uint8 = result_rgb.clip(0, 255).astype(np.uint8)
+        
+        # result_alpha 应该是 (H, W) uint8
+        result_alpha_uint8 = result_alpha.clip(0, 255).astype(np.uint8)
+        
+        # 转换为 ComfyUI 张量格式
+        # IMAGE: (1, H, W, 3) float32 [0, 1]
+        merged_image_tensor = self._np_to_tensor(result_rgb_uint8)
+        
+        # MASK: (1, H, W) float32 [0, 1]
+        merged_alpha_tensor = self._mask_np_to_tensor(result_alpha_uint8)
+        
+        return (merged_image_tensor, merged_alpha_tensor)
+
+
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
@@ -608,6 +847,7 @@ NODE_CLASS_MAPPINGS = {
     "Example": Example,
     "LoadImageFromURL": LoadImageFromURL,
     "FillRGBAAlphaZeroBackground": FillRGBAAlphaZeroBackground,
+    "LayerMerge": LayerMerge,
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
@@ -616,4 +856,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "Example": "Example Node",
     "LoadImageFromURL": "Load Image From URL",
     "FillRGBAAlphaZeroBackground": "Fill RGBA Transparent Pixels",
+    "LayerMerge": "Layer Merge (多图层合并)",
 }
