@@ -96,7 +96,7 @@ function getNodeImgUrl(node, idx) {
 }
 
 /**
- * Fallback: get a URL from a directly-connected LoadImage widget.
+ * Fallback: get a URL from a directly-connected LoadImage or LoadImageFromURL widget.
  * Only used on first open (before the node has ever been executed).
  */
 function getLoadImageUrl(node, inputName) {
@@ -106,9 +106,57 @@ function getLoadImageUrl(node, inputName) {
     const info = app.graph.links[link];
     if (!info) return null;
     const src = app.graph.getNodeById(info.origin_id);
-    if (!src || src.type !== "LoadImage") return null;
-    const w = src.widgets?.find(w => w.name === "image");
-    if (w?.value) return `/view?filename=${encodeURIComponent(w.value)}&type=input`;
+    if (!src) return null;
+
+    const srcType = String(src.type ?? "");
+    const srcTitle = String(src.title ?? "");
+    const nodeLabel = `${srcType} ${srcTitle}`.toLowerCase();
+    const widgets = Array.isArray(src.widgets) ? src.widgets : [];
+
+    // 1) URL-like source: accept any widget whose name contains "url" (case-insensitive).
+    // Prefer nodes that look URL-related by type/title, but still allow pure widget-name detection.
+    const urlWidget = widgets.find(w => {
+        const n = String(w?.name ?? "").toLowerCase();
+        return n.includes("url") && typeof w?.value === "string" && w.value.trim();
+    });
+    if (urlWidget) {
+        const v = String(urlWidget.value).trim();
+        const urlLooksValid = /^(https?:)?\/\//i.test(v) || v.startsWith("data:image/");
+        const nodeLooksUrlish = /url|http|web|download|fetch/.test(nodeLabel);
+        if (urlLooksValid || nodeLooksUrlish) return v;
+    }
+
+    // 2) Local file-like source: broaden beyond exact LoadImage type.
+    // Try common widget names used by image loader nodes.
+    const localFileWidget = widgets.find(w => {
+        const n = String(w?.name ?? "").toLowerCase();
+        return ["image", "filename", "file", "path"].includes(n) &&
+               typeof w?.value === "string" && w.value.trim();
+    });
+    if (localFileWidget) {
+        const filename = String(localFileWidget.value).trim();
+        // Skip values that are likely direct web URLs; those are handled above.
+        if (!/^(https?:)?\/\//i.test(filename) && !filename.startsWith("data:image/")) {
+            return `/view?filename=${encodeURIComponent(filename)}&type=input`;
+        }
+    }
+
+    // 3) Fallback for nodes that clearly look like local image loaders
+    // where widget names are non-standard but still include an "image" selector value.
+    if (/loadimage|image loader|load image/.test(nodeLabel)) {
+        const maybeImageWidget = widgets.find(w =>
+            String(w?.name ?? "").toLowerCase().includes("image") &&
+            typeof w?.value === "string" &&
+            w.value.trim()
+        );
+        if (maybeImageWidget) {
+            const filename = String(maybeImageWidget.value).trim();
+            if (!/^(https?:)?\/\//i.test(filename) && !filename.startsWith("data:image/")) {
+                return `/view?filename=${encodeURIComponent(filename)}&type=input`;
+            }
+        }
+    }
+    
     return null;
 }
 
@@ -178,7 +226,7 @@ function openEditor(node) {
     header.innerHTML = `
         <span>🎯 Interactive Perspective Editor</span>
         <span style="font-size:11px;color:#aaa">
-            Drag handle = reshape &nbsp;|&nbsp; Drag inside quad = move layer &nbsp;|&nbsp;
+            Drag handle = reshape &nbsp;|&nbsp; Shift+Drag handle = uniform scale &nbsp;|&nbsp; Drag inside quad = move layer &nbsp;|&nbsp;
             Drag empty = pan &nbsp;|&nbsp; Scroll = zoom &nbsp;|&nbsp; Z = reset view
         </span>`;
 
@@ -413,6 +461,10 @@ function openEditor(node) {
     let moving     = false; // moving entire quad
     let moveStartWx = 0, moveStartWy = 0; // world-space anchor at move start
     let cornersAtMoveStart = null;
+    let scaling    = false; // Shift+drag on handle: uniform scale around quad center
+    let scaleCenterWx = 0, scaleCenterWy = 0;
+    let scaleStartDist = 1;
+    let cornersAtScaleStart = null;
     let panning    = false;
     let panStartX  = 0, panStartY = 0;
     let panTxStart = 0, panTyStart = 0;
@@ -456,6 +508,23 @@ function openEditor(node) {
         moveStartWy = w.y;
         cornersAtMoveStart = corners.map(c => ({ x: c.x, y: c.y }));
         canvas.style.cursor = "move";
+    }
+
+    function beginUniformScale(handleIdx) {
+        const worldCorners = corners.map(c => ({
+            x: c.x * bgNatW,
+            y: c.y * bgNatH,
+        }));
+        scaleCenterWx = worldCorners.reduce((s, p) => s + p.x, 0) / 4;
+        scaleCenterWy = worldCorners.reduce((s, p) => s + p.y, 0) / 4;
+
+        const hp = worldCorners[handleIdx];
+        scaleStartDist = Math.hypot(hp.x - scaleCenterWx, hp.y - scaleCenterWy);
+        if (scaleStartDist < 1e-6) scaleStartDist = 1e-6;
+
+        cornersAtScaleStart = corners.map(c => ({ x: c.x, y: c.y }));
+        scaling = true;
+        canvas.style.cursor = "nwse-resize";
     }
 
     canvas.addEventListener("mousedown", e => {
@@ -511,8 +580,27 @@ function openEditor(node) {
         }
 
         if (dragging >= 0) {
-            const c = screenToCorner(sx, sy);
-            corners[dragging] = c;
+            if (e.shiftKey) {
+                if (!scaling) beginUniformScale(dragging);
+
+                const w = screenToWorld(sx, sy);
+                const curDist = Math.hypot(w.x - scaleCenterWx, w.y - scaleCenterWy);
+                let factor = curDist / scaleStartDist;
+                factor = Math.max(0.01, Math.min(100, factor));
+
+                corners = cornersAtScaleStart.map(c0 => {
+                    const wx0 = c0.x * bgNatW;
+                    const wy0 = c0.y * bgNatH;
+                    const wx = scaleCenterWx + (wx0 - scaleCenterWx) * factor;
+                    const wy = scaleCenterWy + (wy0 - scaleCenterWy) * factor;
+                    return { x: wx / bgNatW, y: wy / bgNatH };
+                });
+            } else {
+                scaling = false;
+                cornersAtScaleStart = null;
+                const c = screenToCorner(sx, sy);
+                corners[dragging] = c;
+            }
             drawScene();
             return;
         }
@@ -531,7 +619,9 @@ function openEditor(node) {
             dragging = -1;
             panning  = false;
             moving   = false;
+            scaling  = false;
             cornersAtMoveStart = null;
+            cornersAtScaleStart = null;
             canvas.style.cursor = "default";
         }
     }, { once: false });
@@ -613,22 +703,36 @@ function openEditor(node) {
     bgImg.onload = () => {
         bgNatW = bgImg.naturalWidth;
         bgNatH = bgImg.naturalHeight;
+        console.log(`[IPM] Background image loaded: ${bgNatW}x${bgNatH}`);
         onLoad();
     };
-    bgImg.onerror = onLoad;
+    bgImg.onerror = () => {
+        console.warn(`[IPM] Failed to load background image from: ${bgUrl}`);
+        onLoad();
+    };
     bgImg.src = bgUrl ?? "";
-    if (!bgUrl) onLoad();   // no background – fire immediately
+    if (!bgUrl) {
+        console.warn("[IPM] No background image URL found. Using checkerboard.");
+        onLoad();   // no background – fire immediately
+    }
 
     layerImg = new Image();
     layerImg.crossOrigin = "anonymous";
     layerImg.onload = () => {
         layerNatW = layerImg.naturalWidth;
         layerNatH = layerImg.naturalHeight;
+        console.log(`[IPM] Layer image loaded: ${layerNatW}x${layerNatH}`);
         onLoad();
     };
-    layerImg.onerror = onLoad;
+    layerImg.onerror = () => {
+        console.warn(`[IPM] Failed to load layer image from: ${layerUrl}`);
+        onLoad();
+    };
     layerImg.src = layerUrl ?? "";
-    if (!layerUrl) onLoad();
+    if (!layerUrl) {
+        console.warn("[IPM] No layer image URL found.");
+        onLoad();
+    }
 
     // focus so keyboard events land immediately
     overlay.tabIndex = 0;
