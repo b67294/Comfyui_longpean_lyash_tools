@@ -694,10 +694,28 @@ function openEditor(node) {
         }
     }
 
-    // Prefer the original source file (LoadImage) for full fidelity and alpha.
-    // Fall back to the temp PNG saved by the backend after execution.
-    const bgUrl    = getLoadImageUrl(node, "background_image") ?? getNodeImgUrl(node, 1);
-    const layerUrl = getLoadImageUrl(node, "layer_image")      ?? getNodeImgUrl(node, 2);
+    // Prefer direct upstream URL. If unavailable, fall back to node.imgs cache.
+    const bgUpstreamUrl = getLoadImageUrl(node, "background_image");
+    const layerUpstreamUrl = getLoadImageUrl(node, "layer_image");
+    const bgNodeImgUrl = getNodeImgUrl(node, 1);
+    const layerNodeImgUrl = getNodeImgUrl(node, 2);
+
+    const bgUrl = bgUpstreamUrl ?? bgNodeImgUrl;
+    const layerUrl = layerUpstreamUrl ?? layerNodeImgUrl;
+
+    if (!bgUpstreamUrl && bgNodeImgUrl) {
+        console.info("[IPM] background_image upstream URL not found, using node.imgs fallback.");
+    }
+    if (!layerUpstreamUrl && layerNodeImgUrl) {
+        console.info("[IPM] layer_image upstream URL not found, using node.imgs fallback.");
+    }
+
+    if (!bgUpstreamUrl && !bgNodeImgUrl) {
+        console.warn("[IPM] background_image source URL unavailable. Execute the workflow once to populate node.imgs.");
+    }
+    if (!layerUpstreamUrl && !layerNodeImgUrl) {
+        console.warn("[IPM] layer_image source URL unavailable. Execute the workflow once to populate node.imgs.");
+    }
 
     bgImg = new Image();
     bgImg.crossOrigin = "anonymous";
@@ -713,7 +731,7 @@ function openEditor(node) {
     };
     bgImg.src = bgUrl ?? "";
     if (!bgUrl) {
-        console.warn("[IPM] No background image URL found. Using checkerboard.");
+        console.warn("[IPM] No background image URL found after both strategies. Using checkerboard.");
         onLoad();   // no background – fire immediately
     }
 
@@ -731,7 +749,7 @@ function openEditor(node) {
     };
     layerImg.src = layerUrl ?? "";
     if (!layerUrl) {
-        console.warn("[IPM] No layer image URL found.");
+        console.warn("[IPM] No layer image URL found after both strategies.");
         onLoad();
     }
 

@@ -340,12 +340,19 @@ class InteractivePerspectiveMixer:
                     print(f"[IPM] Warning: Failed to save {tag} image: {e}")
                     return None
             
-            # Try to save all three images
+            # Keep index convention aligned with frontend: [result, background, layer]
             result_save = _save(result_u8[:, :, :3], "r")
             bg_save = _save(bg_np, "b")
             layer_save = _save(layer_np, "l")
-            
-            # Build ui_images, filtering out None values
+
+            # Fallback to preserve three preview entries when a single save fails.
+            if result_save is None:
+                result_save = bg_save or layer_save
+            if bg_save is None:
+                bg_save = result_save or layer_save
+            if layer_save is None:
+                layer_save = result_save or bg_save
+
             ui_images = [x for x in [result_save, bg_save, layer_save] if x is not None]
             
         except Exception as e:
@@ -720,6 +727,10 @@ class LayerMerge:
                     "default": False,
                     "tooltip": "是否翻转第 10 组 Alpha（开启后：透明与不透明互换）。",
                 }),
+                "output_rgba": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "输出格式：开启则输出 RGBA (含透明通道)，关闭则输出 RGB + 分离 MASK",
+                }),
             },
         }
 
@@ -752,7 +763,12 @@ class LayerMerge:
         """(H, W) uint8 numpy → (1, H, W) float tensor (MASK format)."""
         return torch.from_numpy(arr.astype(np.float32) / 255.0).unsqueeze(0)
 
-    def merge(self, group_1_image, group_1_alpha, group_1_invert_alpha=False, **kwargs):
+    @staticmethod
+    def _np_to_tensor_rgba(arr: np.ndarray) -> torch.Tensor:
+        """(H, W, 4) uint8 numpy → (1, H, W, 4) float tensor (RGBA 格式)."""
+        return torch.from_numpy(arr.astype(np.float32) / 255.0).unsqueeze(0)
+
+    def merge(self, group_1_image, group_1_alpha, group_1_invert_alpha=False, output_rgba=True, **kwargs):
         """
         合并多组图片，返回 (merged_image, merged_alpha)
         """
@@ -830,9 +846,17 @@ class LayerMerge:
         # result_alpha 应该是 (H, W) uint8
         result_alpha_uint8 = result_alpha.clip(0, 255).astype(np.uint8)
         
-        # 转换为 ComfyUI 张量格式
-        # IMAGE: (1, H, W, 3) float32 [0, 1]
-        merged_image_tensor = self._np_to_tensor(result_rgb_uint8)
+        # 根据 output_rgba 参数决定输出格式
+        if output_rgba:
+            # 合并 RGB + Alpha 为 RGBA
+            result_rgba_uint8 = np.concatenate(
+                [result_rgb_uint8, result_alpha_uint8[:, :, np.newaxis]], 
+                axis=-1
+            )  # (H, W, 4) uint8
+            merged_image_tensor = self._np_to_tensor_rgba(result_rgba_uint8)  # (1, H, W, 4) float32
+        else:
+            # 仅 RGB
+            merged_image_tensor = self._np_to_tensor(result_rgb_uint8)  # (1, H, W, 3) float32
         
         # MASK: (1, H, W) float32 [0, 1]
         merged_alpha_tensor = self._mask_np_to_tensor(result_alpha_uint8)

@@ -1,8 +1,12 @@
 from inspect import cleandoc
 import ast
+import os
+import uuid
 import numpy as np
 import cv2
 import torch
+from PIL import Image
+import folder_paths
 
 
 class InteractivePerspectiveMixerAdvanced:
@@ -217,7 +221,66 @@ class InteractivePerspectiveMixerAdvanced:
         result_mask_tensor = torch.from_numpy(out_alpha_u8.astype(np.float32) / 255.0).unsqueeze(0)
         corners_out_str = self._corners_to_output_str(active_corners)
 
-        return (result_tensor, warped_layer_tensor, result_mask_tensor, corners_out_str)
+        ui_images = []
+        try:
+            tmpdir = folder_paths.get_temp_directory()
+            uid = uuid.uuid4().hex[:10]
+
+            def _save(arr, tag):
+                if arr is None or getattr(arr, "size", 0) == 0:
+                    return None
+
+                name = f"ipm_adv_{tag}_{uid}.png"
+                try:
+                    if arr.dtype != np.uint8:
+                        if arr.dtype in [np.float32, np.float64]:
+                            arr = (arr * 255).clip(0, 255).astype(np.uint8)
+                        else:
+                            arr = arr.astype(np.uint8)
+
+                    if arr.ndim == 2:
+                        pil_img = Image.fromarray(arr, mode="L")
+                    elif arr.ndim == 3:
+                        c = arr.shape[2]
+                        if c == 1:
+                            pil_img = Image.fromarray(arr[:, :, 0], mode="L")
+                        elif c == 3:
+                            pil_img = Image.fromarray(arr[:, :, :3], mode="RGB")
+                        elif c >= 4:
+                            pil_img = Image.fromarray(arr[:, :, :4], mode="RGBA")
+                        else:
+                            return None
+                    else:
+                        return None
+
+                    pil_img.save(os.path.join(tmpdir, name), compress_level=1)
+                    return {"filename": name, "subfolder": "", "type": "temp"}
+                except Exception as e:
+                    print(f"[IPM-ADV] Warning: failed to save {tag}: {e}")
+                    return None
+
+            # Keep index convention aligned with frontend: [result, background, layer]
+            result_preview = _save(result_rgb_u8, "r")
+            background_preview = _save(bg_np, "b")
+            layer_preview = _save(layer_np, "l")
+
+            # Fallback to preserve 3 preview entries when one save fails.
+            if result_preview is None:
+                result_preview = background_preview or layer_preview
+            if background_preview is None:
+                background_preview = result_preview or layer_preview
+            if layer_preview is None:
+                layer_preview = result_preview or background_preview
+
+            ui_images = [x for x in [result_preview, background_preview, layer_preview] if x is not None]
+        except Exception as e:
+            print(f"[IPM-ADV] Error saving preview images: {e}")
+            ui_images = []
+
+        return {
+            "ui": {"images": ui_images},
+            "result": (result_tensor, warped_layer_tensor, result_mask_tensor, corners_out_str),
+        }
 
 
 NODE_CLASS_MAPPINGS = {
