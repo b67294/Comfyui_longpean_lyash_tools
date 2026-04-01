@@ -17,6 +17,7 @@ console.log("The newest custom Js Loaded!")
 // ─── Constants ───────────────────────────────────────────────────────────────
 const NODE_TYPES     = new Set([
     "InteractivePerspectiveMixer",
+    "InteractivePerspectiveMixerAdvanced",
 ]);
 const HANDLE_RADIUS  = 9;          // px – drawn handle circle radius
 const HANDLE_COLORS  = ["#e74c3c", "#2ecc71", "#3498db", "#f39c12"]; // TL TR BR BL
