@@ -72,6 +72,10 @@ class InteractivePerspectiveMixer:
                         "直接按此坐标进行透视变换。该字段同时也是 Open Editor 按钮的坐标写入目标。"
                     ),
                 }),
+                "save_preview": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "开启则保存3张预览图 (结果+背景+图层) 用于 Open Editor；关闭则不保存任何预览（节省磁盘）",
+                }),
             },
         }
 
@@ -165,6 +169,7 @@ class InteractivePerspectiveMixer:
         background_mask: torch.Tensor = None,
         layer_mask: torch.Tensor = None,
         corners_input: str = "",
+        save_preview: bool = False,
     ):
         bg_np    = self._tensor_to_uint8(background_image)
         layer_np = self._tensor_to_uint8(layer_image)
@@ -302,62 +307,64 @@ class InteractivePerspectiveMixer:
         # bg_np and layer_np are saved as-is (preserving original channels incl. alpha)
         # so the editor shows the actual source image, not a stripped RGB copy.
         ui_images = []
-        try:
-            tmpdir = folder_paths.get_temp_directory()
-            uid = uuid.uuid4().hex[:10]
-            
-            def _save(arr, tag):
-                """Save numpy array to PNG and return ComfyUI format dict."""
-                if arr is None or arr.size == 0:
-                    return None
+        
+        if save_preview:
+            try:
+                tmpdir = folder_paths.get_temp_directory()
+                uid = uuid.uuid4().hex[:10]
                 
-                name = f"ipm_{tag}_{uid}.png"
-                try:
-                    # Ensure array is uint8
-                    if arr.dtype != np.uint8:
-                        arr = (arr * 255).clip(0, 255).astype(np.uint8) if arr.dtype in [np.float32, np.float64] else arr.astype(np.uint8)
-                    
-                    # Determine channels
-                    if arr.ndim == 2:
-                        # Grayscale
-                        pil_img = Image.fromarray(arr, mode="L")
-                    elif arr.ndim == 3:
-                        c = arr.shape[2]
-                        if c == 1:
-                            pil_img = Image.fromarray(arr[:, :, 0], mode="L")
-                        elif c == 3:
-                            pil_img = Image.fromarray(arr[:, :, :3], mode="RGB")
-                        elif c >= 4:
-                            pil_img = Image.fromarray(arr[:, :, :4], mode="RGBA")
-                        else:
-                            return None
-                    else:
+                def _save(arr, tag):
+                    """Save numpy array to PNG and return ComfyUI format dict."""
+                    if arr is None or arr.size == 0:
                         return None
                     
-                    pil_img.save(os.path.join(tmpdir, name), compress_level=1)
-                    return {"filename": name, "subfolder": "", "type": "temp"}
-                except Exception as e:
-                    print(f"[IPM] Warning: Failed to save {tag} image: {e}")
-                    return None
-            
-            # Keep index convention aligned with frontend: [result, background, layer]
-            result_save = _save(result_u8[:, :, :3], "r")
-            bg_save = _save(bg_np, "b")
-            layer_save = _save(layer_np, "l")
+                    name = f"ipm_{tag}_{uid}.png"
+                    try:
+                        # Ensure array is uint8
+                        if arr.dtype != np.uint8:
+                            arr = (arr * 255).clip(0, 255).astype(np.uint8) if arr.dtype in [np.float32, np.float64] else arr.astype(np.uint8)
+                        
+                        # Determine channels
+                        if arr.ndim == 2:
+                            # Grayscale
+                            pil_img = Image.fromarray(arr, mode="L")
+                        elif arr.ndim == 3:
+                            c = arr.shape[2]
+                            if c == 1:
+                                pil_img = Image.fromarray(arr[:, :, 0], mode="L")
+                            elif c == 3:
+                                pil_img = Image.fromarray(arr[:, :, :3], mode="RGB")
+                            elif c >= 4:
+                                pil_img = Image.fromarray(arr[:, :, :4], mode="RGBA")
+                            else:
+                                return None
+                        else:
+                            return None
+                        
+                        pil_img.save(os.path.join(tmpdir, name), compress_level=1)
+                        return {"filename": name, "subfolder": "", "type": "temp"}
+                    except Exception as e:
+                        print(f"[IPM] Warning: Failed to save {tag} image: {e}")
+                        return None
+                
+                # Keep index convention aligned with frontend: [result, background, layer]
+                result_save = _save(result_u8[:, :, :3], "r")
+                bg_save = _save(bg_np, "b")
+                layer_save = _save(layer_np, "l")
 
-            # Fallback to preserve three preview entries when a single save fails.
-            if result_save is None:
-                result_save = bg_save or layer_save
-            if bg_save is None:
-                bg_save = result_save or layer_save
-            if layer_save is None:
-                layer_save = result_save or bg_save
+                # Fallback to preserve three preview entries when a single save fails.
+                if result_save is None:
+                    result_save = bg_save or layer_save
+                if bg_save is None:
+                    bg_save = result_save or layer_save
+                if layer_save is None:
+                    layer_save = result_save or bg_save
 
-            ui_images = [x for x in [result_save, bg_save, layer_save] if x is not None]
-            
-        except Exception as e:
-            print(f"[IPM] Error saving preview images: {e}")
-            ui_images = []
+                ui_images = [x for x in [result_save, bg_save, layer_save] if x is not None]
+                
+            except Exception as e:
+                print(f"[IPM] Error saving preview images: {e}")
+                ui_images = []
 
         return {
             "ui": {"images": ui_images},
