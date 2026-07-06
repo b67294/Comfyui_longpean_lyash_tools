@@ -228,16 +228,15 @@ class InteractivePerspectiveMixer:
 
         M = cv2.getPerspectiveTransform(src_pts, dst_pts)
 
-        warp_flags  = cv2.INTER_LINEAR
-        warp_border = cv2.BORDER_CONSTANT
+        warp_flags = cv2.INTER_CUBIC
 
         warped_rgb   = cv2.warpPerspective(
             layer_rgb, M, (bg_w, bg_h),
-            flags=warp_flags, borderMode=warp_border, borderValue=(0, 0, 0),
+            flags=warp_flags, borderMode=cv2.BORDER_REPLICATE,
         )
         warped_alpha = cv2.warpPerspective(
             layer_alpha, M, (bg_w, bg_h),
-            flags=warp_flags, borderMode=warp_border, borderValue=0,
+            flags=warp_flags, borderMode=cv2.BORDER_CONSTANT, borderValue=0,
         )
 
         # ---- blending -------------------------------------------------------

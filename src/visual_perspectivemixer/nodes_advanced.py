@@ -176,15 +176,14 @@ class InteractivePerspectiveMixerAdvanced:
             layer_rgb,
             M,
             (bg_w, bg_h),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=(0, 0, 0),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE,
         )
         warped_alpha_u8 = cv2.warpPerspective(
             layer_alpha_u8,
             M,
             (bg_w, bg_h),
-            flags=cv2.INTER_LINEAR,
+            flags=cv2.INTER_CUBIC,
             borderMode=cv2.BORDER_CONSTANT,
             borderValue=0,
         )
