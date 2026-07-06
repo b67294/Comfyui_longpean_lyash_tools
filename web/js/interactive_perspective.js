@@ -22,6 +22,9 @@ const NODE_TYPES     = new Set([
 const HANDLE_RADIUS  = 9;          // px – drawn handle circle radius
 const HANDLE_COLORS  = ["#e74c3c", "#2ecc71", "#3498db", "#f39c12"]; // TL TR BR BL
 const HANDLE_LABELS  = ["TL", "TR", "BR", "BL"];
+const ROTATE_HANDLE_RADIUS = 10;
+const ROTATE_HANDLE_OFFSET = 34;
+const ROTATE_SNAP_DEGREES = 5;
 
 // ─── Math helpers ────────────────────────────────────────────────────────────
 
@@ -163,13 +166,23 @@ function getLoadImageUrl(node, inputName) {
 
 // ─── Default corners ─────────────────────────────────────────────────────────
 
-function defaultCorners() {
+function defaultCorners(bgW = 1, bgH = 1, layerW = 1, layerH = 1) {
     // Centred 80 % rectangle – relative coords
+    const scale = Math.min(
+        bgW / Math.max(layerW, 1),
+        bgH / Math.max(layerH, 1),
+    ) * 0.8;
+    const wRel = (layerW * scale) / Math.max(bgW, 1);
+    const hRel = (layerH * scale) / Math.max(bgH, 1);
+    const x0 = 0.5 - wRel / 2;
+    const y0 = 0.5 - hRel / 2;
+    const x1 = 0.5 + wRel / 2;
+    const y1 = 0.5 + hRel / 2;
     return [
-        { x: 0.1, y: 0.1 }, // TL
-        { x: 0.9, y: 0.1 }, // TR
-        { x: 0.9, y: 0.9 }, // BR
-        { x: 0.1, y: 0.9 }, // BL
+        { x: x0, y: y0 }, // TL
+        { x: x1, y: y0 }, // TR
+        { x: x1, y: y1 }, // BR
+        { x: x0, y: y1 }, // BL
     ];
 }
 
@@ -197,7 +210,9 @@ function parseCorners(raw) {
 function openEditor(node) {
     /* ── find corners_input widget ─────────────────────────────────────── */
     const cornersWidget = node.widgets?.find(w => w.name === "corners_input");
-    let corners = parseCorners(cornersWidget?.value) ?? defaultCorners();
+    const parsedCorners = parseCorners(cornersWidget?.value);
+    let usingDefaultCorners = !parsedCorners;
+    let corners = parsedCorners ?? defaultCorners();
 
     /* ── overlay & dialog DOM ──────────────────────────────────────────── */
     const overlay = document.createElement("div");
@@ -326,6 +341,54 @@ function openEditor(node) {
         return { x: w.x / bgNatW, y: w.y / bgNatH };
     }
 
+    function quadCenterWorld(cornerList = corners) {
+        const pts = cornerList.map(c => ({
+            x: c.x * bgNatW,
+            y: c.y * bgNatH,
+        }));
+        return {
+            x: pts.reduce((sum, p) => sum + p.x, 0) / 4,
+            y: pts.reduce((sum, p) => sum + p.y, 0) / 4,
+        };
+    }
+
+    function topMidWorld(cornerList = corners) {
+        return {
+            x: ((cornerList[0].x + cornerList[1].x) * bgNatW) / 2,
+            y: ((cornerList[0].y + cornerList[1].y) * bgNatH) / 2,
+        };
+    }
+
+    function rotateHandleScreen() {
+        const sc = corners.map(c => cornerToScreen(c));
+        const topMid = {
+            x: (sc[0].x + sc[1].x) / 2,
+            y: (sc[0].y + sc[1].y) / 2,
+        };
+        const center = {
+            x: sc.reduce((sum, p) => sum + p.x, 0) / 4,
+            y: sc.reduce((sum, p) => sum + p.y, 0) / 4,
+        };
+        let vx = topMid.x - center.x;
+        let vy = topMid.y - center.y;
+        const len = Math.hypot(vx, vy) || 1;
+        vx /= len;
+        vy /= len;
+        return {
+            x: topMid.x + vx * ROTATE_HANDLE_OFFSET,
+            y: topMid.y + vy * ROTATE_HANDLE_OFFSET,
+            anchorX: topMid.x,
+            anchorY: topMid.y,
+        };
+    }
+
+    function snapAngleToRightAngle(angleRad) {
+        const snapStep = Math.PI / 2;
+        const snapped = Math.round(angleRad / snapStep) * snapStep;
+        const deltaDeg = Math.abs((angleRad - snapped) * 180 / Math.PI);
+        return deltaDeg <= ROTATE_SNAP_DEGREES ? snapped : angleRad;
+    }
+
     /* ── fit background in the canvas view ──────────────────────────────── */
     function fitBackground() {
         const pad = 40;
@@ -446,6 +509,34 @@ function openEditor(node) {
             ctx.fillText(HANDLE_LABELS[i], x, y);
         });
 
+        /* rotation handle */
+        const rh = rotateHandleScreen();
+        ctx.beginPath();
+        ctx.moveTo(rh.anchorX, rh.anchorY);
+        ctx.lineTo(rh.x, rh.y);
+        ctx.strokeStyle = "rgba(255,255,255,0.55)";
+        ctx.lineWidth = 1.25;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(rh.x, rh.y, ROTATE_HANDLE_RADIUS + 3, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(rh.x, rh.y, ROTATE_HANDLE_RADIUS, 0, Math.PI * 2);
+        ctx.fillStyle = "#9b59b6";
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("R", rh.x, rh.y);
+
         /* zoom indicator */
         ctx.fillStyle = "rgba(255,255,255,0.4)";
         ctx.font      = "11px monospace";
@@ -469,6 +560,11 @@ function openEditor(node) {
     let panning    = false;
     let panStartX  = 0, panStartY = 0;
     let panTxStart = 0, panTyStart = 0;
+    let rotating = false;
+    let rotateCenterWx = 0, rotateCenterWy = 0;
+    let rotateStartMouseAngle = 0;
+    let rotateStartOrientation = 0;
+    let cornersAtRotateStart = null;
 
     /** Ray-casting: is screen point (sx,sy) inside the perspective quad? */
     function hitInsideQuad(sx, sy) {
@@ -493,6 +589,12 @@ function openEditor(node) {
         return -1;
     }
 
+    function hitRotateHandle(sx, sy) {
+        const h = rotateHandleScreen();
+        const dx = sx - h.x, dy = sy - h.y;
+        return dx * dx + dy * dy < (ROTATE_HANDLE_RADIUS + 5) ** 2;
+    }
+
     function startPan(clientX, clientY) {
         panning    = true;
         panStartX  = clientX;
@@ -509,6 +611,19 @@ function openEditor(node) {
         moveStartWy = w.y;
         cornersAtMoveStart = corners.map(c => ({ x: c.x, y: c.y }));
         canvas.style.cursor = "move";
+    }
+
+    function startRotate(sx, sy) {
+        rotating = true;
+        const center = quadCenterWorld();
+        const topMid = topMidWorld();
+        const w = screenToWorld(sx, sy);
+        rotateCenterWx = center.x;
+        rotateCenterWy = center.y;
+        rotateStartMouseAngle = Math.atan2(w.y - center.y, w.x - center.x);
+        rotateStartOrientation = Math.atan2(topMid.y - center.y, topMid.x - center.x);
+        cornersAtRotateStart = corners.map(c => ({ x: c.x, y: c.y }));
+        canvas.style.cursor = "alias";
     }
 
     function beginUniformScale(handleIdx) {
@@ -541,6 +656,10 @@ function openEditor(node) {
         }
 
         if (e.button === 0) {
+            if (hitRotateHandle(sx, sy)) {
+                startRotate(sx, sy);
+                return;
+            }
             const h = hitHandle(sx, sy);
             if (h >= 0) {
                 // Hit a handle → drag it
@@ -564,6 +683,31 @@ function openEditor(node) {
         if (panning) {
             viewTx = panTxStart + (e.clientX - panStartX);
             viewTy = panTyStart + (e.clientY - panStartY);
+            drawScene();
+            return;
+        }
+
+        if (rotating) {
+            const w = screenToWorld(sx, sy);
+            const mouseAngle = Math.atan2(w.y - rotateCenterWy, w.x - rotateCenterWx);
+            let delta = mouseAngle - rotateStartMouseAngle;
+
+            if (!e.altKey) {
+                const snappedOrientation = snapAngleToRightAngle(rotateStartOrientation + delta);
+                delta = snappedOrientation - rotateStartOrientation;
+            }
+
+            const cos = Math.cos(delta);
+            const sin = Math.sin(delta);
+            corners = cornersAtRotateStart.map(c0 => {
+                const wx0 = c0.x * bgNatW;
+                const wy0 = c0.y * bgNatH;
+                const dx = wx0 - rotateCenterWx;
+                const dy = wy0 - rotateCenterWy;
+                const wx = rotateCenterWx + dx * cos - dy * sin;
+                const wy = rotateCenterWy + dx * sin + dy * cos;
+                return { x: wx / bgNatW, y: wy / bgNatH };
+            });
             drawScene();
             return;
         }
@@ -607,7 +751,9 @@ function openEditor(node) {
         }
 
         // Show grab/crosshair cursor on hover
-        if (hitHandle(sx, sy) >= 0)
+        if (hitRotateHandle(sx, sy))
+            canvas.style.cursor = "alias";
+        else if (hitHandle(sx, sy) >= 0)
             canvas.style.cursor = "crosshair";
         else if (hitInsideQuad(sx, sy))
             canvas.style.cursor = "move";
@@ -616,13 +762,15 @@ function openEditor(node) {
     });
 
     window.addEventListener("mouseup", e => {
-        if (dragging >= 0 || panning || moving) {
+        if (dragging >= 0 || panning || moving || rotating) {
             dragging = -1;
             panning  = false;
             moving   = false;
+            rotating = false;
             scaling  = false;
             cornersAtMoveStart = null;
             cornersAtScaleStart = null;
+            cornersAtRotateStart = null;
             canvas.style.cursor = "default";
         }
     }, { once: false });
@@ -653,7 +801,8 @@ function openEditor(node) {
 
     /* ── buttons ─────────────────────────────────────────────────────────── */
     btnReset.addEventListener("click", () => {
-        corners = defaultCorners();
+        corners = defaultCorners(bgNatW, bgNatH, layerNatW, layerNatH);
+        usingDefaultCorners = true;
         drawScene();
     });
 
@@ -689,6 +838,9 @@ function openEditor(node) {
     function onLoad() {
         loadCount++;
         if (loadCount >= TOTAL) {
+            if (usingDefaultCorners) {
+                corners = defaultCorners(bgNatW, bgNatH, layerNatW, layerNatH);
+            }
             fitBackground();
             drawScene();
         }
